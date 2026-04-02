@@ -1,6 +1,5 @@
 <template>
   <div class="qa-container">
-    <div>22222</div>
     <div class="chat-container" style="padding: 0 10px">
       <div class="title-bg" style="height: 50px"></div>
 
@@ -171,15 +170,13 @@ body,
 .qa-container {
   height: 100%;
   overflow: hidden;
-  display: flex;
-  width: 100%;
+
 
   .chat-container {
     position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
-    flex:1;
 
     .title-bg {
       background: #000;
