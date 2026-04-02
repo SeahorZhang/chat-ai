@@ -16,14 +16,15 @@
         </div>
       </div>
 
-      <!-- 返回底部按钮：用户离开底部时显示 -->
+      <!-- 市面常见：离底部较远时显示按钮；有未读则给出计数 -->
       <button
         v-show="showBackToBottom"
         type="button"
         class="back-to-bottom-btn"
         @click="handleBackToBottom"
       >
-        回到底部
+        <span>回到底部</span>
+        <span v-if="unreadCount > 0" class="badge">{{ unreadCount }}</span>
       </button>
 
       <div class="message-input-chat">
@@ -43,74 +44,59 @@ export default {
 
   data() {
     return {
-      /**
-       * 聊天消息列表（这里用数字模拟流式追加）
-       */
+      /** 聊天消息（示例数据） */
       list: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
 
-      /**
-       * 自动滚动开关：
-       * true  => 新消息到来时自动跟随
-       * false => 用户已手动干预，不自动跟随
-       */
+      /** 是否允许自动跟随到底部 */
       autoScrollEnabled: true,
 
-      /**
-       * 是否处于触摸中（移动端）
-       */
+      /** 移动端是否正在触摸滚动 */
       isTouching: false,
 
-      /**
-       * 是否展示“回到底部”按钮
-       */
+      /** 是否显示“回到底部”按钮 */
       showBackToBottom: false,
 
-      /**
-       * rAF id：用于合并滚动写入，降低低端机压力
-       */
+      /** 用户离开底部期间累积的新消息数 */
+      unreadCount: 0,
+
+      /** 自动滚动 rAF id */
       rafId: null,
 
-      /**
-       * 模拟流式输出的定时器 id
-       */
+      /** 滚动事件节流 rAF id */
+      scrollRafId: null,
+
+      /** 模拟流式输出定时器 */
       streamTimer: null,
 
-      /**
-       * 自动滚动控制器实例
-       */
+      /** 自动滚动控制器 */
       autoScroller: null,
     }
   },
 
   mounted() {
-    // 创建滚动控制器（逻辑与 UI 解耦，便于复用）
+    // 创建控制器：参数保持简洁，便于理解和维护
     this.autoScroller = createChatAutoScrollController({
       state: this,
       bottomThreshold: 24,
+      showButtonOffset: 160,
     })
 
-    // 首次渲染强制滚到底部
+    // 首次进入强制到底
     this.autoScroller.scrollToBottom(this.$refs.scrollEl, true)
 
-    // 模拟 AI 流式输出：每 200ms 追加一条消息
+    // 模拟 AI 流式输出
     this.streamTimer = setInterval(() => {
       this.list.push(this.list.length + 1)
-
-      // 仅在“允许自动滚动 + 非触摸中”时跟随到底部
-      if (this.autoScrollEnabled && !this.isTouching) {
-        this.autoScroller.scheduleScrollToBottom(this.$refs.scrollEl)
-      }
+      this.autoScroller.onNewMessage(this.$refs.scrollEl)
     }, 200)
   },
 
   beforeDestroy() {
-    // 清理定时器
     if (this.streamTimer) {
       clearInterval(this.streamTimer)
       this.streamTimer = null
     }
 
-    // 清理 rAF
     if (this.autoScroller) {
       this.autoScroller.destroy()
       this.autoScroller = null
@@ -118,30 +104,22 @@ export default {
   },
 
   methods: {
-    /**
-     * 滚动事件：同步“是否在底部”的状态
-     */
+    /** 滚动中：同步底部状态（内部已做 rAF 节流） */
     onScroll() {
       this.autoScroller.onScroll(this.$refs.scrollEl)
     },
 
-    /**
-     * 触摸开始：立即停止自动滚动
-     */
+    /** 手指按下：立即停止自动跟随 */
     onTouchStart() {
       this.autoScroller.onTouchStart()
     },
 
-    /**
-     * 触摸结束：如果已到达底部，则恢复自动滚动
-     */
+    /** 手指抬起：根据位置决定是否恢复自动跟随 */
     onTouchEnd() {
       this.autoScroller.onTouchEnd(this.$refs.scrollEl)
     },
 
-    /**
-     * 点击“回到底部”按钮：强制滚到底部并恢复自动滚动
-     */
+    /** 点击按钮：强制到底 + 恢复跟随 */
     handleBackToBottom() {
       this.autoScrollEnabled = true
       this.autoScroller.scrollToBottom(this.$refs.scrollEl, true)
@@ -177,6 +155,7 @@ body,
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
       overscroll-behavior: contain;
+      scroll-behavior: auto;
     }
 
     .message-input-chat {
@@ -189,6 +168,9 @@ body,
       right: 18px;
       bottom: 120px;
       z-index: 10;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       border: none;
       border-radius: 999px;
       padding: 10px 14px;
@@ -196,7 +178,19 @@ body,
       color: #fff;
       font-size: 13px;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-      opacity: 0.92;
+      opacity: 0.95;
+    }
+
+    .back-to-bottom-btn .badge {
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 9px;
+      background: #ff4d4f;
+      color: #fff;
+      font-size: 11px;
+      line-height: 18px;
+      text-align: center;
     }
 
     .back-to-bottom-btn:active {
