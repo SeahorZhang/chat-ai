@@ -5,7 +5,7 @@
  * 1) 新消息流式到来时，默认自动跟随到底部。
  * 2) 用户手动滑动时，立即暂停自动跟随。
  * 3) 用户回到底部后，自动恢复跟随。
- * 4) 提供“返回底部”按钮与未读计数。
+ * 4) 提供“返回底部”按钮显示控制。
  * 5) 用 requestAnimationFrame 合并高频滚动事件，减少卡顿。
  */
 export function createChatAutoScrollController({
@@ -34,7 +34,6 @@ export function createChatAutoScrollController({
    * 同步状态：
    * - autoScrollEnabled
    * - showBackToBottom
-   * - unreadCount（到达底部时清零）
    */
   function updateByPosition(scrollEl) {
     const distance = getDistanceToBottom(scrollEl)
@@ -42,10 +41,6 @@ export function createChatAutoScrollController({
 
     state.autoScrollEnabled = atBottom
     state.showBackToBottom = distance > showButtonOffset
-
-    if (atBottom) {
-      state.unreadCount = 0
-    }
   }
 
   /** 用户触摸开始：立即停止自动滚动 */
@@ -95,8 +90,7 @@ export function createChatAutoScrollController({
       return
     }
 
-    // 非跟随状态下，累计“新消息数”
-    state.unreadCount += 1
+    // 不自动跟随时，仅刷新按钮显示状态
     updateByPosition(scrollEl)
   }
 

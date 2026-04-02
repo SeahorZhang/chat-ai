@@ -1,5 +1,6 @@
 <template>
   <div class="qa-container">
+    <div>22222</div>
     <div class="chat-container" style="padding: 0 10px">
       <div class="title-bg" style="height: 50px"></div>
 
@@ -16,19 +17,15 @@
         </div>
       </div>
 
-      <!-- 市面常见：离底部较远时显示按钮；有未读则给出计数 -->
-      <button
-        v-show="showBackToBottom"
-        type="button"
-        class="back-to-bottom-btn"
+      <!-- 按钮固定在输入区正上方中间，位置随输入区高度变化 -->
+      <BackToBottomButton
+        :visible="showBackToBottom"
+        :bottom-offset="backToBottomOffset"
         @click="handleBackToBottom"
-      >
-        <span>回到底部</span>
-        <span v-if="unreadCount > 0" class="badge">{{ unreadCount }}</span>
-      </button>
+      />
 
-      <div class="message-input-chat">
-        <div class="roll-scroll">横向滚动按钮</div>
+      <div ref="inputChatRef" class="message-input-chat">
+        <ScrollBtns @click="handleInputHeightChange" />
         <div class="chat-box">输入框</div>
         <div class="box-tip">内容由AI生成提示</div>
       </div>
@@ -38,53 +35,58 @@
 
 <script>
 import { createChatAutoScrollController } from './chatAutoScrollController'
+import ScrollBtns from './components/ScrollBtns.vue'
+import BackToBottomButton from './components/BackToBottomButton.vue'
+
+const INPUT_TOP_GAP = 12
 
 export default {
   name: 'App',
+  components: {
+    ScrollBtns,
+    BackToBottomButton,
+  },
 
   data() {
     return {
-      /** 聊天消息（示例数据） */
+      /** 聊天消息（示例：定时追加） */
       list: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
 
-      /** 是否允许自动跟随到底部 */
+      /** 自动滚动状态 */
       autoScrollEnabled: true,
-
-      /** 移动端是否正在触摸滚动 */
       isTouching: false,
-
-      /** 是否显示“回到底部”按钮 */
       showBackToBottom: false,
 
-      /** 用户离开底部期间累积的新消息数 */
-      unreadCount: 0,
-
-      /** 自动滚动 rAF id */
+      /** requestAnimationFrame 标识（滚动跟随 + 滚动事件节流） */
       rafId: null,
-
-      /** 滚动事件节流 rAF id */
       scrollRafId: null,
 
-      /** 模拟流式输出定时器 */
+      /** 资源句柄 */
       streamTimer: null,
-
-      /** 自动滚动控制器 */
       autoScroller: null,
+      inputResizeObserver: null,
+
+      /** “回到底部”按钮离容器底部的距离 */
+      backToBottomOffset: 112,
     }
   },
 
   mounted() {
-    // 创建控制器：参数保持简洁，便于理解和维护
+    // 初始化自动滚动控制器
     this.autoScroller = createChatAutoScrollController({
       state: this,
       bottomThreshold: 24,
       showButtonOffset: 160,
     })
 
-    // 首次进入强制到底
+    // 首屏直接到底
     this.autoScroller.scrollToBottom(this.$refs.scrollEl, true)
 
-    // 模拟 AI 流式输出
+    // 让按钮初始位置对齐输入区，并监听后续高度变化
+    this.updateBackToBottomOffset()
+    this.observeInputHeight()
+
+    // 模拟流式输出
     this.streamTimer = setInterval(() => {
       this.list.push(this.list.length + 1)
       this.autoScroller.onNewMessage(this.$refs.scrollEl)
@@ -101,28 +103,58 @@ export default {
       this.autoScroller.destroy()
       this.autoScroller = null
     }
+
+    if (this.inputResizeObserver) {
+      this.inputResizeObserver.disconnect()
+      this.inputResizeObserver = null
+    }
   },
 
   methods: {
-    /** 滚动中：同步底部状态（内部已做 rAF 节流） */
+    /** ScrollBtns 调整输入区高度 */
+    handleInputHeightChange(multiplier) {
+      this.$refs.inputChatRef.style.height = `${multiplier * 100}px`
+    },
+
+    /** 高频滚动事件：内部已做 rAF 节流 */
     onScroll() {
       this.autoScroller.onScroll(this.$refs.scrollEl)
     },
 
-    /** 手指按下：立即停止自动跟随 */
+    /** 手动滚动开始：暂停自动跟随 */
     onTouchStart() {
       this.autoScroller.onTouchStart()
     },
 
-    /** 手指抬起：根据位置决定是否恢复自动跟随 */
+    /** 手动滚动结束：根据位置决定是否恢复跟随 */
     onTouchEnd() {
       this.autoScroller.onTouchEnd(this.$refs.scrollEl)
     },
 
-    /** 点击按钮：强制到底 + 恢复跟随 */
+    /** 一键回到底部并恢复自动跟随 */
     handleBackToBottom() {
       this.autoScrollEnabled = true
       this.autoScroller.scrollToBottom(this.$refs.scrollEl, true)
+    },
+
+    /** 根据输入区高度更新按钮位置 */
+    updateBackToBottomOffset() {
+      const inputEl = this.$refs.inputChatRef
+      if (!inputEl) return
+
+      this.backToBottomOffset = inputEl.clientHeight + INPUT_TOP_GAP
+    },
+
+    /** 监听输入区高度变化，保证按钮始终贴着输入区上方 */
+    observeInputHeight() {
+      const inputEl = this.$refs.inputChatRef
+      if (!inputEl || typeof ResizeObserver === 'undefined') return
+
+      this.inputResizeObserver = new ResizeObserver(() => {
+        this.updateBackToBottomOffset()
+      })
+
+      this.inputResizeObserver.observe(inputEl)
     },
   },
 }
@@ -139,12 +171,15 @@ body,
 .qa-container {
   height: 100%;
   overflow: hidden;
+  display: flex;
+  width: 100%;
 
   .chat-container {
     position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
+    flex:1;
 
     .title-bg {
       background: #000;
@@ -161,41 +196,6 @@ body,
     .message-input-chat {
       height: 100px;
       background: #ccc;
-    }
-
-    .back-to-bottom-btn {
-      position: absolute;
-      right: 18px;
-      bottom: 120px;
-      z-index: 10;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      border: none;
-      border-radius: 999px;
-      padding: 10px 14px;
-      background: #111;
-      color: #fff;
-      font-size: 13px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-      opacity: 0.95;
-    }
-
-    .back-to-bottom-btn .badge {
-      min-width: 18px;
-      height: 18px;
-      padding: 0 5px;
-      border-radius: 9px;
-      background: #ff4d4f;
-      color: #fff;
-      font-size: 11px;
-      line-height: 18px;
-      text-align: center;
-    }
-
-    .back-to-bottom-btn:active {
-      transform: scale(0.98);
-      opacity: 1;
     }
   }
 }
