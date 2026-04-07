@@ -36,6 +36,8 @@ export function createChatAutoScrollController({
   let smoothScrollRafId = null
   /** 新消息到来时，合并多次 follow 请求的 rAF id */
   let followRafId = null
+  /** 流式输出期间“持续追底模式”的 rAF id */
+  let continuousFollowRafId = null
   /** 用户 touchstart 后的“保护期释放”定时器 */
   let touchReleaseTimer = null
   /** 用来判断“滚动已经停下来”的空闲定时器 */
@@ -101,21 +103,29 @@ export function createChatAutoScrollController({
     scrollIdleTimer = null
   }
 
-  /** 取消已经排队但尚未执行的 follow 请求 */
+  /** 取消已经排队但尚未执行的一次性 follow 请求 */
   function cancelFollow() {
     if (!followRafId) return
     cancelAnimationFrame(followRafId)
     followRafId = null
   }
 
+  /** 停止流式期间的“持续追底模式” */
+  function stopContinuousFollow() {
+    if (!continuousFollowRafId) return
+    cancelAnimationFrame(continuousFollowRafId)
+    continuousFollowRafId = null
+  }
+
   /**
    * 统一停止“自动滚动相关动作”。
    *
-   * 这里会停掉两类动作：
+   * 这里会停掉三类动作：
    * 1. 已经开始执行的平滑滚动动画
-   * 2. 仅仅排队中、下一帧才会执行的 follow 请求
+   * 2. 仅仅排队中、下一帧才会执行的一次性 follow 请求
+   * 3. 流式输出期间持续运行的“追底循环”
    *
-   * 这样用户一触摸，就不会再被“排队中的自动滚动”偷袭。
+   * 这样用户一触摸，就不会再被任何形式的自动滚动偷袭。
    */
   function stopAutoScrollMotion() {
     isAnimatingToBottom = false
@@ -126,6 +136,7 @@ export function createChatAutoScrollController({
     }
 
     cancelFollow()
+    stopContinuousFollow()
   }
 
   // =====================
@@ -365,13 +376,66 @@ export function createChatAutoScrollController({
   }
 
   /**
+   * 流式输出期间的“持续追底模式”。
+   *
+   * 和一次性 follow 的区别：
+   * - 一次性 follow：收到一条增量消息，就做一次短动画。
+   * - 持续追底：只要流还在输出，就每一帧都朝最新底部逼近。
+   *
+   * 这种模式更像真实 AI Chat：
+   * 内容在持续增长时，底部不是“跳一下再停”，
+   * 而是始终被轻柔地吸住。
+   *
+   * 实现原理：
+   * - 每帧重新读取最新 targetTop
+   * - 不直接跳到 targetTop，而是按一定比例逼近
+   * - 距离越大，单帧步长越大；距离越小，自动减速收尾
+   *
+   * 这本质上是一个“阻尼追踪”模型，
+   * 比反复开短动画更连续，也更不容易抖动。
+   */
+  function startContinuousFollow(scrollEl) {
+    if (!scrollEl || continuousFollowRafId) return
+
+    const step = () => {
+      continuousFollowRafId = null
+
+      if (!scrollEl || !state.isStreaming || state.isTouching || !state.autoScrollEnabled) {
+        return
+      }
+
+      const distance = getDistanceToBottom(scrollEl)
+
+      if (distance <= 0.5) {
+        scrollEl.scrollTop = scrollEl.scrollHeight
+        updateByPosition(scrollEl)
+      } else {
+        const minStep = 6
+        const maxStep = 48
+        const ratio = Math.min(distance / 240, 1)
+        const easedRatio = Math.sqrt(ratio)
+        const stepSize = Math.min(maxStep, Math.max(minStep, distance * 0.18 + easedRatio * 18))
+
+        scrollEl.scrollTop += Math.min(stepSize, distance)
+        updateByPosition(scrollEl)
+      }
+
+      if (state.isStreaming && !state.isTouching && state.autoScrollEnabled) {
+        continuousFollowRafId = requestAnimationFrame(step)
+      }
+    }
+
+    continuousFollowRafId = requestAnimationFrame(step)
+  }
+
+  /**
    * 新消息到来时的“轻微平滑跟随”。
    *
-   * 这里把 duration 改成按距离自适应：
+   * 非流式阶段使用一次性 follow：
    * - 距离很近：更轻、更快
    * - 距离较远：更丝滑、更明显
    *
-   * 这样能在不同内容增长速度下，都保持更像 AI Chat 的跟随体感。
+   * 流式阶段则优先使用“持续追底模式”。
    */
   function animateFollowToBottom(scrollEl) {
     animateScrollToBottom(scrollEl, {
@@ -405,12 +469,19 @@ export function createChatAutoScrollController({
    * 所以这里先合并到下一帧，只保留一次 follow 请求。
    */
   function scheduleScrollToBottom(scrollEl) {
-    if (!scrollEl || state.isTouching || followRafId || smoothScrollRafId) return
+    if (!scrollEl || state.isTouching || followRafId || smoothScrollRafId || continuousFollowRafId) {
+      return
+    }
 
     followRafId = requestAnimationFrame(() => {
       followRafId = null
 
       if (state.isTouching || !state.autoScrollEnabled) return
+
+      if (state.isStreaming) {
+        startContinuousFollow(scrollEl)
+        return
+      }
 
       animateFollowToBottom(scrollEl)
     })
