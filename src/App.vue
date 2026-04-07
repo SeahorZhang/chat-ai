@@ -13,7 +13,8 @@
         class="qa-right-scrollbar"
         @scroll.passive="onScroll"
         @touchstart.passive="onTouchStart"
-        @touchend.passive="onTouchEnd"
+        @pointerdown.passive="onPointerDown"
+        @wheel.passive="onWheel"
       >
         <div class="message-list">
           <div
@@ -26,7 +27,7 @@
               class="message-bubble"
               :class="{ 'message-bubble--thinking': item.thinking }"
             >
-              <p class="message-text">{{ item.content }}</p>
+              <p class="message-text" v-html="renderMessageContent(item.content)" />
               <span v-if="item.streaming" class="typing-caret" />
             </div>
           </div>
@@ -124,7 +125,7 @@ export default {
 
     // 首屏进入时滚到底部，并初始化“回到底部”按钮位置
     this.$nextTick(() => {
-      this.autoScroller.scrollToBottom(this.$refs.scrollEl, true)
+      this.autoScroller.animateScrollToBottom(this.$refs.scrollEl, { force: true, duration: 420 })
       this.updateBackToBottomOffset()
       this.observeInputHeight()
     })
@@ -214,7 +215,7 @@ export default {
     /**
      * 单步流式输出：
      * - 每次追加 1~3 个字符
-     * - 标点后额外停顿，模拟“语义呼吸”
+     * - 标点后额外停顿，模拟“语义呼吸"
      */
     streamStep({ token, message, fullText, index }) {
       if (!this.isCurrentToken(token) || !message) return
@@ -235,8 +236,8 @@ export default {
       const lastChar = nextPart.slice(-1)
       const isPauseChar = /[，。！？；,.!?;]/.test(lastChar)
       const delay = isPauseChar
-        ? 180 + Math.floor(Math.random() * 120)
-        : 25 + Math.floor(Math.random() * 55)
+        ? 60 + Math.floor(Math.random() * 60)
+        : 8 + Math.floor(Math.random() * 25)
 
       this.addTimer(() => {
         this.streamStep({ token, message, fullText, index: nextIndex })
@@ -296,6 +297,11 @@ export default {
       return this.messages.find((msg) => msg.id === this.activeAssistantMessageId)
     },
 
+    /** 打字机消息使用 HTML 渲染 */
+    renderMessageContent(content) {
+      return content
+    },
+
     // =====================
     // 定时器管理
     // =====================
@@ -325,17 +331,28 @@ export default {
       this.autoScroller.onScroll(this.$refs.scrollEl)
     },
 
+    /** 移动端 touchstart：进入手动接管保护期 */
     onTouchStart() {
-      this.autoScroller.onTouchStart()
+      this.autoScroller.onTouchStart(this.$refs.scrollEl)
     },
 
-    onTouchEnd() {
-      this.autoScroller.onTouchEnd(this.$refs.scrollEl)
+    /** PC 端 pointerdown：进入手动接管保护期 */
+    onPointerDown() {
+      this.autoScroller.onPointerDown(this.$refs.scrollEl)
+    },
+
+    /** PC 端滚轮滚动前：先锁定手动接管，避免与自动跟随冲突 */
+    onWheel() {
+      this.autoScroller.onWheel(this.$refs.scrollEl)
     },
 
     handleBackToBottom() {
       this.autoScrollEnabled = true
-      this.autoScroller.scrollToBottom(this.$refs.scrollEl, true)
+      this.showBackToBottom = false
+      this.autoScroller.animateScrollToBottom(this.$refs.scrollEl, {
+        force: true,
+        duration: 200,
+      })
     },
 
     // =====================
