@@ -91,9 +91,21 @@ export default {
       isStreaming: false,
       isThinking: false,
 
-      /** 自动滚动相关状态 */
+      /** 自动滚动是否仍应跟随最新消息 */
       autoScrollEnabled: true,
-      isTouching: false,
+
+      /**
+       * 用户是否正在主动与滚动区域交互。
+       *
+       * 这个命名比 `isTouching` 更准确，因为它覆盖的不只是触摸：
+       * - touchstart
+       * - pointerdown
+       * - wheel
+       * - 以及这些输入触发后的一小段“滚动活跃期”
+       */
+      isUserInteracting: false,
+
+      /** “回到底部”按钮是否显示 */
       showBackToBottom: false,
 
       /** 自动滚动控制器实例 */

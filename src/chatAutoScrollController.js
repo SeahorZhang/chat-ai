@@ -8,7 +8,7 @@
  *
  * 实现原则：
  * - 单一职责：控制器只关心滚动状态，不关心消息内容。
- * - 显式状态：所有行为都只围绕 `autoScrollEnabled`、`isTouching`、
+ * - 显式状态：所有行为都只围绕 `autoScrollEnabled`、`isUserInteracting`、
  *   `showBackToBottom` 这几个状态展开，避免隐式副作用。
  * - 帧级合并：scroll / 新消息事件都尽量合并到 requestAnimationFrame，
  *   减少高频事件导致的重复计算与重复渲染。
@@ -30,7 +30,7 @@ export function createChatAutoScrollController({
   let scrollIdleTimer = null
 
   // =====================
-  // 基础位置计算
+  // 位置计算与状态同步
   // =====================
 
   /** 当前距离底部还有多少像素 */
@@ -50,9 +50,9 @@ export function createChatAutoScrollController({
     return getDistanceToBottom(scrollEl) <= bottomThreshold
   }
 
-  /** 用户是否正处于手动接管阶段 */
-  function isManualInteractionLocked() {
-    return state.isTouching
+  /** 当前是否正处于用户手动交互阶段 */
+  function isUserInteractionActive() {
+    return state.isUserInteracting
   }
 
   /**
@@ -77,7 +77,7 @@ export function createChatAutoScrollController({
   }
 
   // =====================
-  // 清理函数
+  // 句柄清理与自动滚动终止
   // =====================
 
   /** 清理“触摸释放”计时器，避免旧回调在新的交互阶段误触发 */
@@ -147,7 +147,7 @@ export function createChatAutoScrollController({
   }
 
   // =====================
-  // 用户接管滚动
+  // 用户交互态管理
   // =====================
 
   /**
@@ -173,15 +173,15 @@ export function createChatAutoScrollController({
    * - 惯性滚动
    * - 某些浏览器事件缺失的情况
    */
-  function scheduleTouchRelease(scrollEl) {
+  function scheduleInteractionRelease(scrollEl) {
     clearTouchReleaseTimer()
     touchReleaseTimer = setTimeout(() => {
       touchReleaseTimer = null
-      state.isTouching = false
+      state.isUserInteracting = false
 
       // 触摸释放时，说明已经有一段时间没有新的 scroll 事件了。
       // 此时除了更新自动跟随资格，还要立刻按“停稳后的规则”重新判断按钮。
-      // 否则 scroll idle 计时器更早触发并被 isTouching 拦下后，按钮就不会再有
+      // 否则 scroll idle 计时器更早触发并被交互态拦下后，按钮就不会再有
       // 下一次机会显示，表现为“明明离底部很远，但按钮一直不出现”。
       updateByPosition(scrollEl)
     }, touchReleaseDelay)
@@ -203,7 +203,7 @@ export function createChatAutoScrollController({
       // 手指仍在接管时，不更新按钮显隐。
       // 否则在移动端惯性较弱或 scroll 事件间隔较大时，idle 计时器可能
       // 会抢先触发，导致“回到底部”按钮在手指滑动过程中短暂出现又消失。
-      if (isManualInteractionLocked()) {
+      if (isUserInteractionActive()) {
         return
       }
 
@@ -212,40 +212,43 @@ export function createChatAutoScrollController({
   }
 
   /**
-   * 统一进入手动接管态。
+   * 进入用户手动交互态。
    *
-   * 只要用户明确表达了滚动意图，就立即：
-   * - 停止自动滚动动画
-   * - 暂停自动跟随
-   * - 标记为用户接管中
+   * 这个状态表示：
+   * - 用户正在主动浏览列表
+   * - 自动滚动必须让出控制权
+   * - “回到底部”按钮要等交互结束后再按距离规则决定是否显示
    */
-  function lockManualInteraction(scrollEl) {
+  function activateUserInteraction(scrollEl) {
     stopAutoScroll()
     clearScrollIdleTimer()
 
-    state.isTouching = true
+    state.isUserInteracting = true
     state.autoScrollEnabled = false
 
-    scheduleTouchRelease(scrollEl)
+    scheduleInteractionRelease(scrollEl)
   }
 
-  function onTouchStart(scrollEl) {
+  /** 触摸开始：说明用户准备手动浏览消息列表 */
+  function handleTouchStart(scrollEl) {
     // 触摸开始通常意味着用户准备手动浏览历史消息，立即切换到手动接管态。
-    lockManualInteraction(scrollEl)
+    activateUserInteraction(scrollEl)
   }
 
-  function onPointerDown(scrollEl) {
+  /** pointer down：统一覆盖鼠标、触控笔等非触摸输入 */
+  function handlePointerDown(scrollEl) {
     // pointerdown 覆盖鼠标按下、触控笔等输入源，让不同设备行为一致。
-    lockManualInteraction(scrollEl)
+    activateUserInteraction(scrollEl)
   }
 
-  function onWheel(scrollEl) {
+  /** wheel：表示用户通过滚轮手动浏览列表 */
+  function handleWheel(scrollEl) {
     // 滚轮滚动也是明确的手动意图，因此同样立刻暂停自动跟随。
-    lockManualInteraction(scrollEl)
+    activateUserInteraction(scrollEl)
   }
 
   // =====================
-  // scroll 事件
+  // 滚动事件处理
   // =====================
 
   /**
@@ -254,7 +257,7 @@ export function createChatAutoScrollController({
    * 职责拆分：
    * 1. 进入滚动时立刻隐藏按钮。
    * 2. 用 idle timer 在滚动停止后再决定按钮显隐。
-   * 3. 如果用户正在接管，则持续延长保护期。
+   * 3. 如果用户正在交互，则持续延长保护期。
    * 4. 用一帧合并多个 scroll 事件，只做一次位置同步。
    *
    * 关键约束：
@@ -266,7 +269,7 @@ export function createChatAutoScrollController({
    * - 这里通过 requestAnimationFrame 合并更新，避免每次 scroll 都触发
    *   一轮完整的状态计算与响应式更新。
    */
-  function onScroll(scrollEl) {
+  function handleScroll(scrollEl) {
     if (!scrollEl) return
 
     if (state.showBackToBottom) {
@@ -275,8 +278,8 @@ export function createChatAutoScrollController({
 
     scheduleScrollIdle(scrollEl)
 
-    if (isManualInteractionLocked()) {
-      scheduleTouchRelease(scrollEl)
+    if (isUserInteractionActive()) {
+      scheduleInteractionRelease(scrollEl)
     }
 
     if (scrollRafId) return
@@ -288,7 +291,7 @@ export function createChatAutoScrollController({
   }
 
   // =====================
-  // 自动滚到底部
+  // 自动追底与位置纠正
   // =====================
 
   /**
@@ -324,7 +327,7 @@ export function createChatAutoScrollController({
    */
   function animateScrollToBottom(scrollEl, { force = false, duration = 220 } = {}) {
     if (!scrollEl) return
-    if (!force && (!state.autoScrollEnabled || isManualInteractionLocked())) return
+    if (!force && (!state.autoScrollEnabled || isUserInteractionActive())) return
 
     prepareAutoScroll()
 
@@ -337,7 +340,7 @@ export function createChatAutoScrollController({
       smoothScrollRafId = null
 
       if (!scrollEl) return
-      if (!force && isManualInteractionLocked()) return
+      if (!force && isUserInteractionActive()) return
 
       const latestTargetTop = getBottomTop(scrollEl)
 
@@ -378,7 +381,7 @@ export function createChatAutoScrollController({
    */
   function scrollToBottom(scrollEl, force = false) {
     if (!scrollEl) return
-    if (!force && (!state.autoScrollEnabled || isManualInteractionLocked())) return
+    if (!force && (!state.autoScrollEnabled || isUserInteractionActive())) return
 
     prepareAutoScroll()
     jumpToBottom(scrollEl)
@@ -392,17 +395,21 @@ export function createChatAutoScrollController({
    * - 如果每次追加都立刻启动滚动，会产生大量重复动画。
    * - 因此这里只保留下一帧的一次滚动调度。
    */
-  function scheduleScrollToBottom(scrollEl) {
-    if (!scrollEl || isManualInteractionLocked() || followRafId) return
+  function scheduleFollowToBottom(scrollEl) {
+    if (!scrollEl || isUserInteractionActive() || followRafId) return
 
     followRafId = requestAnimationFrame(() => {
       followRafId = null
 
-      if (isManualInteractionLocked() || !state.autoScrollEnabled) return
+      if (isUserInteractionActive() || !state.autoScrollEnabled) return
 
       animateScrollToBottom(scrollEl, { duration: 220 })
     })
   }
+
+  // =====================
+  // 新消息驱动
+  // =====================
 
   /**
    * 有新消息进入时调用。
@@ -419,16 +426,20 @@ export function createChatAutoScrollController({
    * - 流式渲染不会影响按钮显示规则
    * - 按钮只在不滑动、且距离底部足够远时显示
    */
-  function onNewMessage(scrollEl) {
+  function handleNewMessage(scrollEl) {
     if (!scrollEl) return
 
-    if (state.autoScrollEnabled && !isManualInteractionLocked()) {
-      scheduleScrollToBottom(scrollEl)
+    if (state.autoScrollEnabled && !isUserInteractionActive()) {
+      scheduleFollowToBottom(scrollEl)
       return
     }
 
     updateByPosition(scrollEl, { allowButton: false })
   }
+
+  // =====================
+  // 生命周期清理
+  // =====================
 
   /**
    * 组件销毁时统一清理，避免计时器与动画帧泄漏。
@@ -445,14 +456,14 @@ export function createChatAutoScrollController({
   }
 
   return {
-    // 手动交互入口
-    onTouchStart,
-    onPointerDown,
-    onWheel,
-    onScroll,
+    // 用户交互入口
+    onTouchStart: handleTouchStart,
+    onPointerDown: handlePointerDown,
+    onWheel: handleWheel,
+    onScroll: handleScroll,
 
     // 新消息与自动滚动入口
-    onNewMessage,
+    onNewMessage: handleNewMessage,
     scrollToBottom,
     animateScrollToBottom,
 
