@@ -3,11 +3,7 @@
     <div class="chat-container">
       <header class="chat-header">Mock Streaming Chat</header>
 
-      <!--
-        消息滚动区：
-        - 监听滚动和触摸事件，用于控制“自动跟随到底部”
-        - 用户手动上滑后暂停自动跟随，避免阅读被打断
-      -->
+      <!-- 消息列表滚动区：用户滚动时暂停自动跟随 -->
       <div
         ref="scrollEl"
         class="qa-right-scrollbar"
@@ -100,11 +96,24 @@ export default {
       isTouching: false,
       showBackToBottom: false,
 
-      /** 资源句柄 */
+      /** 自动滚动控制器实例 */
       autoScroller: null,
+
+      /** 输入区高度监听器 */
       inputResizeObserver: null,
+
+      /** “回到底部”按钮距离底部的动态偏移 */
       backToBottomOffset: 112,
-      timerHandles: [],
+
+      /**
+       * 定时器句柄集合。
+       *
+       * 用 Set 而不是数组：
+       * - 新增是 O(1)
+       * - 删除已触发的句柄也是 O(1)
+       * - 流式输出时会频繁创建小定时器，这样更稳妥
+       */
+      timerHandles: new Set(),
 
       /** 消息与会话标识 */
       nextId: 2,
@@ -149,7 +158,13 @@ export default {
     // 发送与流式生成
     // =====================
 
-    /** 发送用户消息并启动一次新的 assistant 回复流 */
+    /**
+     * 发送用户消息并启动一次新的 assistant 回复流。
+     *
+     * 这里先插入用户消息，再启动 assistant 生成，原因是：
+     * - 用户点击发送后，需要立即得到界面反馈
+     * - 不必等待“思考态”出现，交互体感更直接
+     */
     handleSend() {
       const text = this.inputText.trim()
       if (!text || this.isStreaming) return
@@ -171,9 +186,16 @@ export default {
     },
 
     /**
-     * 启动一轮完整回复流程：
-     * - 阶段 A：正在思考（首包过渡）
-     * - 阶段 B：流式输出正文
+     * 启动一轮完整回复流程。
+     *
+     * 整个生成被拆成两个阶段：
+     * - 阶段 A：思考态，用于模拟首包前等待
+     * - 阶段 B：流式输出，用于模拟模型逐步吐字
+     *
+     * token 的作用：
+     * - 每次生成都创建唯一 token
+     * - 后续异步定时器执行时，先校验自己是否仍属于当前会话
+     * - 这样旧会话就不会污染新会话，能避免串流、误写内容等问题
      */
     startAssistantFlow(userText) {
       this.isStreaming = true
@@ -211,9 +233,16 @@ export default {
     },
 
     /**
-     * 单步流式输出：
-     * - 每次追加 1~3 个字符
-     * - 标点后额外停顿，模拟“语义呼吸"
+     * 单步流式输出。
+     *
+     * 原理：
+     * - 每一轮只追加 1~3 个字符，制造连续输出感
+     * - 标点后附加更长停顿，模拟更接近自然语言节奏的“语义呼吸”
+     * - 每次追加后都通知自动滚动控制器，由控制器决定是否继续追底
+     *
+     * 这样拆分后，消息渲染与滚动控制互相解耦：
+     * - 当前方法只负责“文本何时增长”
+     * - 是否滚动、如何滚动交给独立控制器处理
      */
     streamStep({ token, message, fullText, index }) {
       if (!this.isCurrentToken(token) || !message) return
@@ -242,7 +271,15 @@ export default {
       }, delay)
     },
 
-    /** 正常完成一次流式输出 */
+    /**
+     * 正常完成一次流式输出，并收尾当前会话状态。
+     *
+     * 收尾内容包括：
+     * - 关闭消息上的 streaming / thinking 标记
+     * - 重置组件级别的生成状态
+     * - 清空当前活跃会话标识
+     * - 在 DOM 更新后再通知滚动控制器做最终位置判断
+     */
     finishAssistantFlow(token, message) {
       if (!this.isCurrentToken(token)) return
 
@@ -285,17 +322,34 @@ export default {
       this.$nextTick(() => this.autoScroller.onNewMessage(this.$refs.scrollEl))
     },
 
-    /** 获取当前 token 是否仍是活跃会话 */
+    /**
+     * 当前生成会话 token；用于忽略旧定时器。
+     *
+     * 这是一个轻量级“并发隔离”手段：
+     * 只要 token 不匹配，就说明当前回调来自旧任务，必须直接丢弃。
+     */
     isCurrentToken(token) {
       return token && this.activeStreamToken === token
     },
 
-    /** 根据 activeAssistantMessageId 找到当前 assistant 消息 */
+    /**
+     * 当前正在生成的 assistant 消息。
+     *
+     * 单独封装成方法的好处：
+     * - 读取语义更清楚
+     * - 后续若消息结构变化，查找逻辑只需要改一个地方
+     */
     getActiveAssistantMessage() {
       return this.messages.find((msg) => msg.id === this.activeAssistantMessageId)
     },
 
-    /** 打字机消息使用 HTML 渲染 */
+    /**
+     * 渲染消息内容。
+     *
+     * 当前实现直接返回原文，保留一个独立方法主要是为了把“消息数据”与
+     * “展示形式”隔开。后续若接 markdown、链接高亮、代码块渲染，只需要
+     * 在这里扩展，不必修改模板结构。
+     */
     renderMessageContent(content) {
       return content
     },
@@ -304,46 +358,82 @@ export default {
     // 定时器管理
     // =====================
 
-    /** 注册定时器并纳入统一清理 */
+    /**
+     * 注册定时器并纳入统一清理。
+     *
+     * 性能与结构上的考虑：
+     * - 所有异步延迟都走同一个入口，销毁时更容易保证不泄漏
+     * - 定时器执行后立即从集合移除，避免句柄越积越多
+     */
     addTimer(fn, delay) {
       const handle = setTimeout(() => {
-        this.timerHandles = this.timerHandles.filter((id) => id !== handle)
+        this.timerHandles.delete(handle)
         fn()
       }, delay)
 
-      this.timerHandles.push(handle)
+      this.timerHandles.add(handle)
       return handle
     },
 
-    /** 清理所有定时器 */
+    /**
+     * 清理所有定时器。
+     *
+     * 适用于：
+     * - 用户主动停止生成
+     * - 组件销毁
+     * - 需要终止整轮流式输出时
+     */
     clearAllTimers() {
       this.timerHandles.forEach((id) => clearTimeout(id))
-      this.timerHandles = []
+      this.timerHandles.clear()
     },
 
     // =====================
     // 自动滚动与交互事件
     // =====================
 
+    /**
+     * 把原生滚动事件转交给自动滚动控制器。
+     *
+     * 组件层只负责把 DOM 引用传进去，具体的滚动状态机由控制器维护。
+     * 这样模板交互与滚动算法解耦，`App.vue` 不必知道内部细节。
+     */
     onScroll() {
       this.autoScroller.onScroll(this.$refs.scrollEl)
     },
 
-    /** 移动端 touchstart：进入手动接管保护期 */
+    /**
+     * 用户触摸开始时，通知控制器进入“手动接管”阶段。
+     *
+     * 这样后续的新消息和自动滚动动画都不会打断用户阅读。
+     */
     onTouchStart() {
       this.autoScroller.onTouchStart(this.$refs.scrollEl)
     },
 
-    /** PC 端 pointerdown：进入手动接管保护期 */
+    /**
+     * 处理 pointer down，统一兼容鼠标、触控笔等输入设备。
+     */
     onPointerDown() {
       this.autoScroller.onPointerDown(this.$refs.scrollEl)
     },
 
-    /** PC 端滚轮滚动前：先锁定手动接管，避免与自动跟随冲突 */
+    /**
+     * 处理滚轮滚动。
+     *
+     * 虽然不是触摸输入，但本质上也是用户明确在手动浏览，因此逻辑与触摸一致。
+     */
     onWheel() {
       this.autoScroller.onWheel(this.$refs.scrollEl)
     },
 
+    /**
+     * 用户点击“回到底部”按钮。
+     *
+     * 这里会做两件事：
+     * - 立刻隐藏按钮，避免动画过程中再次闪现
+     * - 强制触发一次滚到底部动画，重新回到自动跟随状态
+     */
     handleBackToBottom() {
       this.autoScrollEnabled = true
       this.showBackToBottom = false
@@ -357,7 +447,14 @@ export default {
     // 输入区高度联动（按钮定位）
     // =====================
 
-    /** 根据输入区高度，更新“回到底部”按钮的底部偏移 */
+    /**
+     * 根据输入区高度，更新“回到底部”按钮的底部偏移。
+     *
+     * 原理：
+     * - 按钮不是写死在某个固定像素位置
+     * - 而是动态贴在输入区上方一小段距离
+     * - 这样输入框高度变化时，按钮仍能保持稳定的视觉关系
+     */
     updateBackToBottomOffset() {
       const inputEl = this.$refs.inputChatRef
       if (!inputEl) return
@@ -365,7 +462,14 @@ export default {
       this.backToBottomOffset = inputEl.clientHeight + INPUT_TOP_GAP
     },
 
-    /** 监听输入区高度变化，确保按钮始终贴着输入区上方 */
+    /**
+     * 监听输入区高度变化，确保按钮始终贴着输入区上方。
+     *
+     * 使用 ResizeObserver 的原因：
+     * - 输入区高度会随着内容、换行、按钮状态变化而变化
+     * - 这类变化不适合靠手动猜测时机更新
+     * - 直接观察尺寸变化，响应更准确，也更省心
+     */
     observeInputHeight() {
       const inputEl = this.$refs.inputChatRef
       if (!inputEl || typeof ResizeObserver === 'undefined') return
