@@ -99,8 +99,6 @@ export default {
       autoScrollEnabled: true,
       isTouching: false,
       showBackToBottom: false,
-      rafId: null,
-      scrollRafId: null,
 
       /** 资源句柄 */
       autoScroller: null,
@@ -125,7 +123,7 @@ export default {
 
     // 首屏进入时滚到底部，并初始化“回到底部”按钮位置
     this.$nextTick(() => {
-      this.autoScroller.animateScrollToBottom(this.$refs.scrollEl, { force: true, duration: 420 })
+      this.autoScroller.animateScrollToBottom(this.$refs.scrollEl, { force: true, duration: 240 })
       this.updateBackToBottomOffset()
       this.observeInputHeight()
     })
