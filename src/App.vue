@@ -534,7 +534,7 @@ body,
 .qa-right-scrollbar {
   flex: 1;
   overflow-y: auto;
-  padding: 14px 14px 24px;
+  padding: 14px;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   scroll-behavior: auto;
