@@ -4,7 +4,7 @@
  * 约束：
  * 1. 用户一旦开始手动滚动，自动滚动必须立即让出控制权。
  * 2. 不依赖 `touchend` / `pointerup` 恢复自动滚动。
- * 3. “回到底部”按钮只在滚动停稳后，按当前位置决定是否显示。
+ * 3. “回到底部”按钮只在“离底部超过阈值”且“滚动停稳后”才显示。
  */
 export function createChatAutoScrollController({
   state,
@@ -129,7 +129,7 @@ export function createChatAutoScrollController({
     touchReleaseTimer = setTimeout(() => {
       touchReleaseTimer = null
       state.isUserInteracting = false
-      updateByPosition(scrollEl)
+      updateByPosition(scrollEl, { allowButton: !scrollIdleTimer })
     }, touchReleaseDelay)
   }
 
@@ -294,7 +294,12 @@ export function createChatAutoScrollController({
   /**
    * 有新消息进入时：
    * - 允许自动跟随就调度追底
-   * - 不允许自动跟随就只同步当前位置
+   * - 不允许自动跟随时，按“是否仍在手动交互”决定是否更新按钮
+   *
+   * 这里的关键是：
+   * - 用户手动交互期间，不主动显示按钮，避免滚动中闪烁
+   * - 一旦用户已不在交互中，就应基于当前位置事实立即决定按钮显隐
+   *   否则流式内容持续增长时，按钮会一直卡在旧状态，直到再次滚动才刷新
    */
   function handleNewMessage(scrollEl) {
     if (!scrollEl) return
@@ -304,7 +309,9 @@ export function createChatAutoScrollController({
       return
     }
 
-    updateByPosition(scrollEl, { allowButton: false })
+    updateByPosition(scrollEl, {
+      allowButton: !isUserInteractionActive() && !scrollIdleTimer,
+    })
   }
 
   /** 组件销毁时统一清理所有异步句柄。 */
